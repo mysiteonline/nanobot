@@ -1,0 +1,116 @@
+x-common-config: &common-config
+  build:
+    context: .
+    dockerfile: Dockerfile
+  volumes:
+    - /root/.nanobot:/root/.nanobot
+
+services:
+  nanobot-gateway:
+    <<: *common-config
+    restart: unless-stopped
+    ports:
+      - "18790:18790"
+      
+    # ALL secrets, URLs, and model names are pulled from Coolify securely
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL}
+      - CF_GATEWAY_TOKEN=${CF_GATEWAY_TOKEN}
+      - GS_VISION_TOOL=${GS_VISION_TOOL}
+      - GS_VISION_SECRET=${GS_VISION_SECRET}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_USER_ID=${TELEGRAM_USER_ID}
+      - TELEGRAM_USER_ID_2=${TELEGRAM_USER_ID_2}
+      - PROXY_BASE_URL=${PROXY_BASE_URL}
+      - CF_SEARCH_URL=${CF_SEARCH_URL}
+
+    entrypoint:
+      - sh
+      - -c
+      - |
+        python -c '
+        import os, json
+
+        # Fetch absolutely everything from the environment
+        k = os.environ.get("GEMINI_API_KEY")
+        m = os.environ.get("GEMINI_MODEL")
+        tok = os.environ.get("CF_GATEWAY_TOKEN", "").strip()
+        v = os.environ.get("GS_VISION_TOOL")
+        s = os.environ.get("GS_VISION_SECRET")
+        base = os.environ.get("PROXY_BASE_URL")
+        search_url = os.environ.get("CF_SEARCH_URL")
+
+        c = {
+            "providers": {
+                "gemini": {"apiKey": k, "apiBase": base},
+                "google": {"apiKey": k, "apiBase": base},
+                "openrouter": {"apiKey": k}
+            },
+            "agents": {
+                "defaults": {"model": m}
+            },
+            "tools": {
+                "web": {
+                    "search": {
+                        "provider": "brave",
+                        "apiBase": search_url,
+                        "headers": {
+                            "cf-aig-authorization": f"Bearer {{tok}}"
+                        }
+                    }
+                },
+                "http": {
+                    "vision_browser": {
+                        "url": v,
+                        "method": "POST",
+                        "headers": {"Content-Type": "application/json"},
+                        "description": "Visual browser tool.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string"},
+                                "prompt": {"type": "string"},
+                                "auth_token": {"type": "string", "const": s}
+                            },
+                            "required": ["url", "auth_token"]
+                        }
+                    }
+                }
+            },
+            "channels": {
+                "telegram": {
+                    "enabled": True,
+                    "token": os.environ.get("TELEGRAM_TOKEN"),
+                    "allowFrom": [
+                        os.environ.get("TELEGRAM_USER_ID"),
+                        os.environ.get("TELEGRAM_USER_ID_2")
+                    ]
+                }
+            }
+        }
+
+        os.makedirs("/root/.nanobot", exist_ok=True)
+        print("Writing secure config from environment variables...")
+        with open("/root/.nanobot/config.json", "w") as f:
+            json.dump(c, f)
+        '
+        
+        exec nanobot gateway
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+  
+  nanobot-cli:
+    <<: *common-config
+    profiles:
+      - cli
+    command: ["status"]
+    stdin_open: true
+    tty: true
