@@ -33,33 +33,33 @@ services:
       - sh
       - -c
       - |
-        # 1. INJECT NATIVE TOOLS (Max Efficiency)
-        mkdir -p /app/nanobot/agent/tools/
-        cat <<EOF > /app/nanobot/agent/tools/cloudflare_tools.py
-        import os, httpx
+        python -c '
+        import os, json, sys, httpx
         from typing import Any
+
+        # 1. --- DEFINE NATIVE TOOLS IN-MEMORY ---
         from nanobot.agent.tools.base import Tool
 
         class CloudflareEdgeTool(Tool):
-            """Runs Python/JS code on Cloudflare Edge isolates."""
+            """PRIMARY for logic. Runs code on Cloudflare Edge isolates."""
             @property
             def name(self) -> str: return "edge_compute"
             @property
-            def description(self) -> str: return "PRIMARY for math/logic. Runs code on Cloudflare Edge."
+            def description(self) -> str: return "Run Python/JS code on Cloudflare Edge. Use for math and complex data logic."
             @property
             def parameters(self) -> dict[str, Any]:
-                return {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}
-            async def execute(self, code: str, **kwargs) -> str:
+                return {"type": "object", "properties": {"code": {"type": "string"}, "language": {"type": "string", "enum": ["python", "javascript"]}}, "required": ["code"]}
+            async def execute(self, code: str, language: str = "python", **kwargs) -> str:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(os.environ["CF_DYNAMIC_WORKER_URL"], json={"code": code}, headers={"Authorization": f"Bearer {os.environ['CF_DYNAMIC_WORKER_SECRET']}"})
+                    resp = await client.post(os.environ["CF_DYNAMIC_WORKER_URL"], json={"code": code, "language": language}, headers={"Authorization": f"Bearer {os.environ[\"CF_DYNAMIC_WORKER_SECRET\"]}"})
                     return resp.text[:8000]
 
         class CloudflareBrowserTool(Tool):
-            """Fetches URL content as clean Markdown."""
+            """Web reader. Returns Markdown. Max token efficiency."""
             @property
             def name(self) -> str: return "web_md"
             @property
-            def description(self) -> str: return "Visits a URL and extracts clean Markdown. Token-efficient."
+            def description(self) -> str: return "Visit a URL and get clean Markdown content. High token efficiency."
             @property
             def parameters(self) -> dict[str, Any]:
                 return {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
@@ -67,73 +67,53 @@ services:
                 acc = os.environ["CF_ACCOUNT_ID"]
                 target = f"https://api.cloudflare.com/client/v4/accounts/{acc}/browser-rendering/markdown"
                 async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(target, json={"url": url}, headers={"Authorization": f"Bearer {os.environ['CF_BROWSER_TOKEN']}"})
+                    resp = await client.post(target, json={"url": url}, headers={"Authorization": f"Bearer {os.environ[\"CF_BROWSER_TOKEN\"]}"})
                     return resp.text[:12000]
-        EOF
 
-        # 2. REGISTER NATIVE TOOLS
-        touch /app/nanobot/agent/tools/__init__.py
-        if ! grep -q "CloudflareEdgeTool" /app/nanobot/agent/tools/__init__.py; then
-          echo "from .cloudflare_tools import CloudflareEdgeTool, CloudflareBrowserTool" >> /app/nanobot/agent/tools/__init__.py
-        fi
-
-        # 3. GENERATE MCP-READY CONFIG
-        python -c '
-        import os, json
+        # 2. --- GENERATE CONFIG.JSON ---
         def env(k, d=""): return os.environ.get(k, d).strip()
-        
-        # Security: allowFrom logic from docs
-        allowed = [x for x in [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")] if x]
-        if not allowed: allowed = ["*"] 
+        allowed = [x for x in [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")] if x] or ["*"]
+        tok = env("CF_GATEWAY_TOKEN")
+        aig_h = {"cf-aig-authorization": f"Bearer {tok}"} if tok else {}
 
         c = {
-            "agents": {
-                "defaults": {
-                    "model": env("GEMINI_MODEL"),
-                    "timezone": env("TZ", "Europe/Rome"),
-                    "restrictToWorkspace": False
-                }
-            },
             "providers": {
-                "google": {
-                    "apiKey": env("GEMINI_API_KEY"),
-                    "apiBase": env("CF_PROXY_BASE_URL"),
-                    "extraHeaders": {"cf-aig-authorization": f"Bearer {env(\"CF_GATEWAY_TOKEN\")}"}
-                }
+                "google": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h}
             },
+            "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ", "Europe/Rome"), "restrictToWorkspace": False}},
             "tools": {
-                "exec": {"enable": True},
-                "mcpServers": {
-                    # Example Stdio MCP (Requires npx in Docker)
-                    "vps_files": {
-                        "command": "npx",
-                        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/root/.nanobot"],
-                        "enabledTools": ["read_file", "list_directory"]
+                "web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL"), "headers": aig_h}},
+                "http": {
+                    "vision_browser": {
+                        "url": env("GS_VISION_TOOL"), "method": "POST", "headers": {"Content-Type": "application/json"},
+                        "description": "Visual browser tool.",
+                        "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "auth_token": {"type": "string", "const": env("GS_VISION_SECRET")}}, "required": ["url", "auth_token"]}
                     }
-                    # Example HTTP MCP (Token Efficient)
-                    # "external_api": { "url": "https://mcp.example.com/sse" }
                 },
-                "web": {
-                    "search": {
-                        "provider": "brave",
-                        "apiBase": env("CF_BRAVE_SEARCH_URL"),
-                        "headers": {"cf-aig-authorization": f"Bearer {env(\"CF_GATEWAY_TOKEN\")}"}
-                    }
-                }
+                "shell": {"enabled": True}
             },
-            "channels": {
-                "telegram": {
-                    "enabled": True,
-                    "token": env("TELEGRAM_TOKEN"),
-                    "allowFrom": allowed
-                }
-            }
+            "channels": {"telegram": {"enabled": True, "token": env("TELEGRAM_TOKEN"), "allowFrom": allowed}}
         }
         os.makedirs("/root/.nanobot", exist_ok=True)
         with open("/root/.nanobot/config.json", "w") as f: json.dump(c, f)
+
+        # 3. --- MONKEY-PATCH AGENTLOOP ---
+        from nanobot.agent.loop import AgentLoop
+        original_register = AgentLoop._register_default_tools
+
+        def custom_register(self):
+            original_register(self)
+            self.tools.register(CloudflareEdgeTool())
+            self.tools.register(CloudflareBrowserTool())
+
+        AgentLoop._register_default_tools = custom_register
+
+        # 4. --- START GATEWAY NATIVELY ---
+        print("Starting gateway with Monkey-Patched tools...")
+        from nanobot.cli.commands import app
+        sys.argv = ["nanobot", "gateway", "--config", "/root/.nanobot/config.json"]
+        app()
         '
-        # 4. START WITH EXPLICIT CONFIG (MCP Requirement)
-        exec nanobot gateway --config /root/.nanobot/config.json
 
     deploy:
       resources:
