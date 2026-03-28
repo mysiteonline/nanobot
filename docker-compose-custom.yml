@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     ports:
       - "18790:18790"
-      
+    # Keep ALL your variables here so the bot can use them to write its own code
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL}
@@ -33,94 +33,29 @@ services:
       - sh
       - -c
       - |
+        # Generate the basic config without any monkey-patching
         python -c '
-        import os, json, sys, httpx
-        from typing import Any
-
-        # 1. --- DEFINE YOUR NATIVE TOOLS ---
-        from nanobot.agent.tools.base import Tool
-
-        class CloudflareEdgeTool(Tool):
-            """PRIMARY for logic. Runs code on Cloudflare Edge isolates."""
-            @property
-            def name(self) -> str: return "edge_compute"
-            @property
-            def description(self) -> str: return "Run Python/JS code on Cloudflare Edge. Use for math and complex logic."
-            @property
-            def parameters(self) -> dict[str, Any]:
-                return {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}
-            async def execute(self, code: str, **kwargs) -> str:
-                url = os.environ.get("CF_DYNAMIC_WORKER_URL")
-                sec = os.environ.get("CF_DYNAMIC_WORKER_SECRET")
-                headers = {"Authorization": "Bearer " + str(sec)}
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(url, json={"code": code}, headers=headers)
-                    return resp.text[:8000]
-
-        class CloudflareBrowserTool(Tool):
-            """Web reader. Returns Markdown via Cloudflare Browser Rendering."""
-            @property
-            def name(self) -> str: return "web_md"
-            @property
-            def description(self) -> str: return "Visit a URL and extract clean Markdown content. Very token-efficient."
-            @property
-            def parameters(self) -> dict[str, Any]:
-                return {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
-            async def execute(self, url: str, **kwargs) -> str:
-                acc = os.environ.get("CF_ACCOUNT_ID")
-                token = os.environ.get("CF_BROWSER_TOKEN")
-                target = "https://api.cloudflare.com/client/v4/accounts/" + str(acc) + "/browser-rendering/markdown"
-                headers = {"Authorization": "Bearer " + str(token)}
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(target, json={"url": url}, headers=headers)
-                    return resp.text[:12000]
-
-        # 2. --- GENERATE CONFIG ---
+        import os, json
         def env(k, d=""): return (os.environ.get(k) or d).strip()
-        gemini_key = env("GEMINI_API_KEY")
-        p_cfg = {"apiKey": gemini_key, "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": {"cf-aig-authorization": "Bearer " + env("CF_GATEWAY_TOKEN")}}
         
+        p_cfg = {
+            "apiKey": env("GEMINI_API_KEY"),
+            "apiBase": env("CF_PROXY_BASE_URL"),
+            "extraHeaders": {"cf-aig-authorization": "Bearer " + env("CF_GATEWAY_TOKEN")}
+        }
+
         c = {
             "providers": {"gemini": p_cfg, "google": p_cfg},
-            "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ", "Europe/Rome"), "restrictToWorkspace": False}},
-            "tools": {"web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL")}}, "shell": {"enabled": True}},
-            "channels": {"telegram": {"enabled": True, "token": env("TELEGRAM_TOKEN"), "allowFrom": [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")]}}
+            "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ")}},
+            "tools": {
+                "web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL")}},
+                "shell": {"enabled": True}
+            },
+            "channels": {
+                "telegram": {"enabled": True, "token": env("TELEGRAM_TOKEN"), "allowFrom": [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")]}
+            }
         }
         os.makedirs("/root/.nanobot", exist_ok=True)
         with open("/root/.nanobot/config.json", "w") as f: json.dump(c, f)
-
-        # 3. --- MONKEY PATCH THE AGENTLOOP ---
-        from nanobot.agent.loop import AgentLoop
-        
-        # Save the original method you found
-        original_register_defaults = AgentLoop._register_default_tools
-
-        def custom_register_defaults(self):
-            # First, run all the original logic (ReadFileTool, ExecTool, etc.)
-            original_register_defaults(self)
-            
-            # Now, inject our custom Cloudflare tools into the same registry
-            print("PATCH: Injecting Cloudflare Native Tools into AgentLoop...")
-            self.tools.register(CloudflareEdgeTool())
-            self.tools.register(CloudflareBrowserTool())
-
-        # Apply the patch
-        AgentLoop._register_default_tools = custom_register_defaults
-
-        # 4. --- BOOT ---
-        print("Starting gateway with Cloudflare Monkey-Patch...")
-        from nanobot.cli.commands import app
-        sys.argv = ["nanobot", "gateway", "--config", "/root/.nanobot/config.json"]
-        app()
         '
-
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-
-volumes:
-  nanobot_data:
-    name: ${VOLUME_NAME:-nanobot-default-data}
-    external: true
+        exec nanobot gateway --config /root/.nanobot/config.json
