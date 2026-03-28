@@ -33,7 +33,7 @@ services:
       - sh
       - -c
       - |
-        # 1. Inject Native Cloudflare Tools
+        # 1. Create the Tool File
         mkdir -p /app/nanobot/agent/tools/
         cat <<EOF > /app/nanobot/agent/tools/cloudflare_tools.py
         import os, httpx
@@ -41,32 +41,33 @@ services:
         from nanobot.agent.tools.base import Tool
 
         class CloudflareEdgeTool(Tool):
-            """PRIMARY. Isolated CF sandbox for math/logic. No VPS access."""
+            """Execute code in an isolated Cloudflare sandbox."""
             def __init__(self):
                 self.url = os.environ.get("CF_DYNAMIC_WORKER_URL")
                 self.sec = os.environ.get("CF_DYNAMIC_WORKER_SECRET")
             @property
             def name(self) -> str: return "edge_compute"
             @property
-            def description(self) -> str: return "Run Python/JS code on Cloudflare Edge. Use for math, simulations, and complex logic."
+            def description(self) -> str: 
+                return "Run Python or JS code on Cloudflare Edge. Use this for math, data logic, or untrusted scripts."
             @property
             def parameters(self) -> dict[str, Any]:
                 return {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "Code to run."},
+                        "code": {"type": "string"},
                         "language": {"type": "string", "enum": ["python", "javascript"], "default": "python"}
                     },
                     "required": ["code"]
                 }
             async def execute(self, code: str, language: str = "python", **kwargs) -> str:
-                if not self.url or not self.sec: return "Error: Edge URL or Secret missing."
+                if not self.url: return "Error: CF_DYNAMIC_WORKER_URL is not set."
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(self.url, json={"code": code, "language": language}, headers={"Authorization": f"Bearer {self.sec}"})
-                    return resp.text[:5000] # Token efficiency truncation
+                    return resp.text[:8000]
 
         class CloudflareBrowserTool(Tool):
-            """Web reader. Returns Markdown. Max token efficiency."""
+            """Fetch a URL as clean Markdown."""
             def __init__(self):
                 acc = os.environ.get("CF_ACCOUNT_ID")
                 self.url = f"https://api.cloudflare.com/client/v4/accounts/{acc}/browser-rendering/markdown"
@@ -74,18 +75,26 @@ services:
             @property
             def name(self) -> str: return "web_md"
             @property
-            def description(self) -> str: return "Visit a URL and get clean Markdown content. Very token-efficient."
+            def description(self) -> str: 
+                return "Use this to visit a URL and extract its main text as clean Markdown. Very token-efficient."
             @property
             def parameters(self) -> dict[str, Any]:
                 return {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
             async def execute(self, url: str, **kwargs) -> str:
-                if not self.url or not self.tok: return "Error: Browser Token or ID missing."
+                if not self.tok: return "Error: CF_BROWSER_TOKEN is not set."
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(self.url, json={"url": url}, headers={"Authorization": f"Bearer {self.tok}"})
-                    return resp.text[:10000] # Truncate massive pages for token safety
+                    return resp.text[:12000]
         EOF
 
-        # 2. Generate Provider Config
+        # 2. THE FIX: Register tools in the __init__.py of the tools package
+        # This ensures Nanobot imports these classes during startup discovery.
+        touch /app/nanobot/agent/tools/__init__.py
+        if ! grep -q "CloudflareEdgeTool" /app/nanobot/agent/tools/__init__.py; then
+          echo "from .cloudflare_tools import CloudflareEdgeTool, CloudflareBrowserTool" >> /app/nanobot/agent/tools/__init__.py
+        fi
+
+        # 3. Generate Lean Provider Config
         python -c '
         import os, json
         def env(k, d=""): 
