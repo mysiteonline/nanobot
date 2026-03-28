@@ -37,17 +37,23 @@ services:
         python -c '
         import os, json
 
-        def env(k, d=""): return os.environ.get(k, d).strip()
+        # 1. Clean Helper Function
+        def env(k, d=""): 
+            val = os.environ.get(k)
+            return val.strip() if val else d
 
-        # Auth Header for CF Gateway
+        # 2. Fetch Core Vars
         tok = env("CF_GATEWAY_TOKEN")
         aig_h = {"cf-aig-authorization": f"Bearer {tok}"} if tok else {}
+        gemini_k = env("GEMINI_API_KEY")
+        proxy = env("CF_PROXY_BASE_URL")
 
+        # 3. Build Config
         c = {
             "providers": {
-                "gemini": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h},
-                "google": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h},
-                "openrouter": {"apiKey": env("GEMINI_API_KEY")}
+                "gemini": {"apiKey": gemini_k, "apiBase": proxy, "extraHeaders": aig_h},
+                "google": {"apiKey": gemini_k, "apiBase": proxy, "extraHeaders": aig_h},
+                "openrouter": {"apiKey": gemini_k}
             },
             "agents": {
                 "defaults": {
@@ -67,7 +73,7 @@ services:
                     "url": env("CF_DYNAMIC_WORKER_URL"),
                     "method": "POST",
                     "headers": {"Authorization": f"Bearer {env(\"CF_DYNAMIC_WORKER_SECRET\")}"},
-                    "description": "PRIMARY. Isolated sandbox. Math/logic only. No VPS access.",
+                    "description": "PRIMARY. Isolated CF sandbox. Logic/math. No VPS access.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -108,12 +114,13 @@ services:
                 "telegram": {
                     "enabled": True,
                     "token": env("TELEGRAM_TOKEN"),
-                    "allowFrom": [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")]
+                    "allowFrom": [x for x in [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")] if x]
                 }
             }
         }
 
         os.makedirs("/root/.nanobot", exist_ok=True)
+        print("Writing secure config...")
         with open("/root/.nanobot/config.json", "w") as f:
             json.dump(c, f)
         '
