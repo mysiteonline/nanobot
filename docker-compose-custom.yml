@@ -12,18 +12,22 @@ services:
     ports:
       - "18790:18790"
       
-    # ALL secrets, URLs, and model names are pulled from Coolify securely
+    # Variables pulled from Coolify. No hardcoded data.
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL}
       - CF_GATEWAY_TOKEN=${CF_GATEWAY_TOKEN}
       - GS_VISION_TOOL=${GS_VISION_TOOL}
       - GS_VISION_SECRET=${GS_VISION_SECRET}
+      - CF_PROXY_BASE_URL=${CF_PROXY_BASE_URL}
+      - CF_BRAVE_SEARCH_URL=${CF_BRAVE_SEARCH_URL}
+      - CF_DYNAMIC_WORKER_URL=${CF_DYNAMIC_WORKER_URL}
+      - CF_DYNAMIC_WORKER_SECRET=${CF_DYNAMIC_WORKER_SECRET}
+      - CF_ACCOUNT_ID=${CF_ACCOUNT_ID}
+      - CF_BROWSER_TOKEN=${CF_BROWSER_TOKEN}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_USER_ID=${TELEGRAM_USER_ID}
       - TELEGRAM_USER_ID_2=${TELEGRAM_USER_ID_2}
-      - PROXY_BASE_URL=${PROXY_BASE_URL}
-      - CF_SEARCH_URL=${CF_SEARCH_URL}
       - TZ=${TZ:-Europe/Rome}
 
     entrypoint:
@@ -33,81 +37,86 @@ services:
         python -c '
         import os, json
 
-        # Fetch absolutely everything from the environment
-        k = os.environ.get("GEMINI_API_KEY")
-        m = os.environ.get("GEMINI_MODEL")
-        tok = os.environ.get("CF_GATEWAY_TOKEN", "").strip()
-        v = os.environ.get("GS_VISION_TOOL")
-        s = os.environ.get("GS_VISION_SECRET")
-        base = os.environ.get("PROXY_BASE_URL")
-        search_url = os.environ.get("CF_SEARCH_URL")
+        def env(k, d=""): return os.environ.get(k, d).strip()
+
+        # Auth Header for CF Gateway
+        tok = env("CF_GATEWAY_TOKEN")
+        aig_h = {"cf-aig-authorization": f"Bearer {tok}"} if tok else {}
 
         c = {
             "providers": {
-                "gemini": {
-                    "apiKey": k, 
-                    "apiBase": base,
-                    **({"extraHeaders": {"cf-aig-authorization": f"Bearer {tok}"}} if tok else {})
-                },
-                "google": {
-                    "apiKey": k,
-                    "apiBase": base,
-                    **({"extraHeaders": {"cf-aig-authorization": f"Bearer {tok}"}} if tok else {})
-                },
-                "openrouter": {"apiKey": k}
+                "gemini": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h},
+                "google": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h},
+                "openrouter": {"apiKey": env("GEMINI_API_KEY")}
             },
             "agents": {
                 "defaults": {
-                    "model": m,
-                    "timezone": os.environ.get("TZ", "Europe/Rome")
+                    "model": env("GEMINI_MODEL"),
+                    "timezone": env("TZ", "Europe/Rome")
                 }
             },
             "tools": {
                 "web": {
                     "search": {
                         "provider": "brave",
-                        "apiBase": search_url,
-                        "headers": {
-                            "cf-aig-authorization": f"Bearer {tok}"
-                        }
+                        "apiBase": env("CF_BRAVE_SEARCH_URL"),
+                        "headers": aig_h
                     }
                 },
-                "http": {
-                    "vision_browser": {
-                        "url": v,
-                        "method": "POST",
-                        "headers": {"Content-Type": "application/json"},
-                        "description": "Visual browser tool.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "url": {"type": "string"},
-                                "prompt": {"type": "string"},
-                                "auth_token": {"type": "string", "const": s}
-                            },
-                            "required": ["url", "auth_token"]
-                        }
+                "edge_compute": {
+                    "url": env("CF_DYNAMIC_WORKER_URL"),
+                    "method": "POST",
+                    "headers": {"Authorization": f"Bearer {env(\"CF_DYNAMIC_WORKER_SECRET\")}"},
+                    "description": "PRIMARY. Isolated sandbox. Math/logic only. No VPS access.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string"},
+                            "language": {"type": "string", "enum": ["javascript", "python"]}
+                        },
+                        "required": ["code"]
                     }
+                },
+                "web_md": {
+                    "url": f"https://api.cloudflare.com/client/v4/accounts/{env(\"CF_ACCOUNT_ID\")}/browser-rendering/markdown",
+                    "method": "POST",
+                    "headers": {"Authorization": f"Bearer {env(\"CF_BROWSER_TOKEN\")}"},
+                    "description": "Web reader. Returns Markdown. Max token efficiency.",
+                    "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
+                },
+                "vision_browser": {
+                    "url": env("GS_VISION_TOOL"),
+                    "method": "POST",
+                    "headers": {"Content-Type": "application/json"},
+                    "description": "Visual browser tool.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string"},
+                            "prompt": {"type": "string"},
+                            "auth_token": {"type": "string", "const": env("GS_VISION_SECRET")}
+                        },
+                        "required": ["url", "auth_token"]
+                    }
+                },
+                "shell": {
+                    "provider": "shell",
+                    "description": "FALLBACK. VPS files/system ONLY. Use if edge_compute fails."
                 }
             },
             "channels": {
                 "telegram": {
                     "enabled": True,
-                    "token": os.environ.get("TELEGRAM_TOKEN"),
-                    "allowFrom": [
-                        os.environ.get("TELEGRAM_USER_ID"),
-                        os.environ.get("TELEGRAM_USER_ID_2")
-                    ]
+                    "token": env("TELEGRAM_TOKEN"),
+                    "allowFrom": [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")]
                 }
             }
         }
 
         os.makedirs("/root/.nanobot", exist_ok=True)
-        print("Writing secure config from environment variables...")
         with open("/root/.nanobot/config.json", "w") as f:
             json.dump(c, f)
         '
-        
         exec nanobot gateway
 
     deploy:
@@ -130,3 +139,4 @@ services:
 volumes:
   nanobot_data:
     name: ${VOLUME_NAME:-nanobot-default-data}
+    external: true
