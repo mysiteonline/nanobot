@@ -12,7 +12,6 @@ services:
     ports:
       - "18790:18790"
       
-    # Variables pulled from Coolify. No hardcoded data.
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL}
@@ -34,33 +33,73 @@ services:
       - sh
       - -c
       - |
+        # 1. INJECT NATIVE TOOLS
+        # We place them in the standard tools directory so Nanobot auto-discovers them
+        mkdir -p /app/nanobot/agent/tools/
+        cat <<EOF > /app/nanobot/agent/tools/cloudflare_tools.py
+        import os, httpx
+        from typing import Any
+        from nanobot.agent.tools.base import Tool
+
+        class CloudflareEdgeTool(Tool):
+            """PRIMARY. Isolated CF sandbox. Math/logic only. No VPS access."""
+            def __init__(self):
+                self.url = os.environ.get("CF_DYNAMIC_WORKER_URL")
+                self.sec = os.environ.get("CF_DYNAMIC_WORKER_SECRET")
+            @property
+            def name(self) -> str: return "edge_compute"
+            @property
+            def description(self) -> str: return "Run Python/JS on Cloudflare Edge. Use for math and complex logic."
+            @property
+            def parameters(self) -> dict[str, Any]:
+                return {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string"},
+                        "language": {"type": "string", "enum": ["python", "javascript"]}
+                    },
+                    "required": ["code"]
+                }
+            async def execute(self, code: str, language: str = "python", **kwargs) -> str:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(self.url, json={"code": code, "language": language}, headers={"Authorization": f"Bearer {self.sec}"})
+                    return resp.text
+
+        class CloudflareBrowserTool(Tool):
+            """Web reader. Returns Markdown. Max token efficiency."""
+            def __init__(self):
+                acc = os.environ.get("CF_ACCOUNT_ID")
+                self.url = f"https://api.cloudflare.com/client/v4/accounts/{acc}/browser-rendering/markdown"
+                self.tok = os.environ.get("CF_BROWSER_TOKEN")
+            @property
+            def name(self) -> str: return "web_md"
+            @property
+            def description(self) -> str: return "Visit URL and get clean Markdown content."
+            @property
+            def parameters(self) -> dict[str, Any]:
+                return {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
+            async def execute(self, url: str, **kwargs) -> str:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(self.url, json={"url": url}, headers={"Authorization": f"Bearer {self.tok}"})
+                    return resp.text
+        EOF
+
+        # 2. GENERATE LEAN CONFIG
         python -c '
         import os, json
-
-        # 1. Clean Helper Function
         def env(k, d=""): 
             val = os.environ.get(k)
             return val.strip() if val else d
 
-        # 2. Fetch Core Vars
         tok = env("CF_GATEWAY_TOKEN")
         aig_h = {"cf-aig-authorization": f"Bearer {tok}"} if tok else {}
-        gemini_k = env("GEMINI_API_KEY")
-        proxy = env("CF_PROXY_BASE_URL")
 
-        # 3. Build Config
         c = {
             "providers": {
-                "gemini": {"apiKey": gemini_k, "apiBase": proxy, "extraHeaders": aig_h},
-                "google": {"apiKey": gemini_k, "apiBase": proxy, "extraHeaders": aig_h},
-                "openrouter": {"apiKey": gemini_k}
+                "gemini": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h},
+                "google": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h}
             },
-            "agents": {
-                "defaults": {
-                    "model": env("GEMINI_MODEL"),
-                    "timezone": env("TZ", "Europe/Rome")
-                }
-            },
+            "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ", "Europe/Rome")}},
             "tools": {
                 "web": {
                     "search": {
@@ -69,46 +108,24 @@ services:
                         "headers": aig_h
                     }
                 },
-                "edge_compute": {
-                    "url": env("CF_DYNAMIC_WORKER_URL"),
-                    "method": "POST",
-                    "headers": {"Authorization": f"Bearer {env(\"CF_DYNAMIC_WORKER_SECRET\")}"},
-                    "description": "PRIMARY. Isolated CF sandbox. Logic/math. No VPS access.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string"},
-                            "language": {"type": "string", "enum": ["javascript", "python"]}
-                        },
-                        "required": ["code"]
+                "http": {
+                    "vision_browser": {
+                        "url": env("GS_VISION_TOOL"),
+                        "method": "POST",
+                        "headers": {"Content-Type": "application/json"},
+                        "description": "Visual browser tool.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string"},
+                                "prompt": {"type": "string"},
+                                "auth_token": {"type": "string", "const": env("GS_VISION_SECRET")}
+                            },
+                            "required": ["url", "auth_token"]
+                        }
                     }
                 },
-                "web_md": {
-                    "url": f"https://api.cloudflare.com/client/v4/accounts/{env(\"CF_ACCOUNT_ID\")}/browser-rendering/markdown",
-                    "method": "POST",
-                    "headers": {"Authorization": f"Bearer {env(\"CF_BROWSER_TOKEN\")}"},
-                    "description": "Web reader. Returns Markdown. Max token efficiency.",
-                    "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
-                },
-                "vision_browser": {
-                    "url": env("GS_VISION_TOOL"),
-                    "method": "POST",
-                    "headers": {"Content-Type": "application/json"},
-                    "description": "Visual browser tool.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": {"type": "string"},
-                            "prompt": {"type": "string"},
-                            "auth_token": {"type": "string", "const": env("GS_VISION_SECRET")}
-                        },
-                        "required": ["url", "auth_token"]
-                    }
-                },
-                "shell": {
-                    "provider": "shell",
-                    "description": "FALLBACK. VPS files/system ONLY. Use if edge_compute fails."
-                }
+                "shell": {"enabled": True}
             },
             "channels": {
                 "telegram": {
@@ -118,9 +135,7 @@ services:
                 }
             }
         }
-
         os.makedirs("/root/.nanobot", exist_ok=True)
-        print("Writing secure config...")
         with open("/root/.nanobot/config.json", "w") as f:
             json.dump(c, f)
         '
@@ -131,17 +146,6 @@ services:
         limits:
           cpus: '1'
           memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-  
-  nanobot-cli:
-    <<: *common-config
-    profiles:
-      - cli
-    command: ["status"]
-    stdin_open: true
-    tty: true
 
 volumes:
   nanobot_data:
