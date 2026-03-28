@@ -33,8 +33,7 @@ services:
       - sh
       - -c
       - |
-        # 1. INJECT NATIVE TOOLS
-        # We place them in the standard tools directory so Nanobot auto-discovers them
+        # 1. Inject Native Cloudflare Tools
         mkdir -p /app/nanobot/agent/tools/
         cat <<EOF > /app/nanobot/agent/tools/cloudflare_tools.py
         import os, httpx
@@ -42,28 +41,29 @@ services:
         from nanobot.agent.tools.base import Tool
 
         class CloudflareEdgeTool(Tool):
-            """PRIMARY. Isolated CF sandbox. Math/logic only. No VPS access."""
+            """PRIMARY. Isolated CF sandbox for math/logic. No VPS access."""
             def __init__(self):
                 self.url = os.environ.get("CF_DYNAMIC_WORKER_URL")
                 self.sec = os.environ.get("CF_DYNAMIC_WORKER_SECRET")
             @property
             def name(self) -> str: return "edge_compute"
             @property
-            def description(self) -> str: return "Run Python/JS on Cloudflare Edge. Use for math and complex logic."
+            def description(self) -> str: return "Run Python/JS code on Cloudflare Edge. Use for math, simulations, and complex logic."
             @property
             def parameters(self) -> dict[str, Any]:
                 return {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string"},
-                        "language": {"type": "string", "enum": ["python", "javascript"]}
+                        "code": {"type": "string", "description": "Code to run."},
+                        "language": {"type": "string", "enum": ["python", "javascript"], "default": "python"}
                     },
                     "required": ["code"]
                 }
             async def execute(self, code: str, language: str = "python", **kwargs) -> str:
+                if not self.url or not self.sec: return "Error: Edge URL or Secret missing."
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(self.url, json={"code": code, "language": language}, headers={"Authorization": f"Bearer {self.sec}"})
-                    return resp.text
+                    return resp.text[:5000] # Token efficiency truncation
 
         class CloudflareBrowserTool(Tool):
             """Web reader. Returns Markdown. Max token efficiency."""
@@ -74,17 +74,18 @@ services:
             @property
             def name(self) -> str: return "web_md"
             @property
-            def description(self) -> str: return "Visit URL and get clean Markdown content."
+            def description(self) -> str: return "Visit a URL and get clean Markdown content. Very token-efficient."
             @property
             def parameters(self) -> dict[str, Any]:
                 return {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
             async def execute(self, url: str, **kwargs) -> str:
+                if not self.url or not self.tok: return "Error: Browser Token or ID missing."
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(self.url, json={"url": url}, headers={"Authorization": f"Bearer {self.tok}"})
-                    return resp.text
+                    return resp.text[:10000] # Truncate massive pages for token safety
         EOF
 
-        # 2. GENERATE LEAN CONFIG
+        # 2. Generate Provider Config
         python -c '
         import os, json
         def env(k, d=""): 
@@ -101,13 +102,7 @@ services:
             },
             "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ", "Europe/Rome")}},
             "tools": {
-                "web": {
-                    "search": {
-                        "provider": "brave",
-                        "apiBase": env("CF_BRAVE_SEARCH_URL"),
-                        "headers": aig_h
-                    }
-                },
+                "web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL"), "headers": aig_h}},
                 "http": {
                     "vision_browser": {
                         "url": env("GS_VISION_TOOL"),
