@@ -3,7 +3,7 @@ x-common-config: &common-config
     context: .
     dockerfile: Dockerfile
   volumes:
-    - /root/.nanobot:/root/.nanobot
+    - ${HOST_DATA_PATH}:/root/.nanobot
 
 services:
   nanobot-gateway:
