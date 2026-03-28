@@ -37,59 +37,62 @@ services:
         import os, json, sys, httpx
         from typing import Any
 
-        # 1. --- DEFINE NATIVE TOOLS IN-MEMORY ---
+        # 1. --- DEFINE NATIVE TOOLS ---
         from nanobot.agent.tools.base import Tool
 
         class CloudflareEdgeTool(Tool):
-            """PRIMARY for logic. Runs code on Cloudflare Edge isolates."""
+            """Runs code on Cloudflare Edge isolates."""
             @property
             def name(self) -> str: return "edge_compute"
             @property
-            def description(self) -> str: return "Run Python/JS code on Cloudflare Edge. Use for math and complex data logic."
+            def description(self) -> str: return "Run Python/JS code on Cloudflare Edge. Use for math and logic."
             @property
             def parameters(self) -> dict[str, Any]:
                 return {"type": "object", "properties": {"code": {"type": "string"}, "language": {"type": "string", "enum": ["python", "javascript"]}}, "required": ["code"]}
             async def execute(self, code: str, language: str = "python", **kwargs) -> str:
+                # FIX: Extract to variables to avoid backslash/quote issues in f-strings
+                url = os.environ.get("CF_DYNAMIC_WORKER_URL")
+                sec = os.environ.get("CF_DYNAMIC_WORKER_SECRET")
+                headers = {"Authorization": "Bearer " + str(sec)}
+                
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(os.environ["CF_DYNAMIC_WORKER_URL"], json={"code": code, "language": language}, headers={"Authorization": f"Bearer {os.environ[\"CF_DYNAMIC_WORKER_SECRET\"]}"})
+                    resp = await client.post(url, json={"code": code, "language": language}, headers=headers)
                     return resp.text[:8000]
 
         class CloudflareBrowserTool(Tool):
-            """Web reader. Returns Markdown. Max token efficiency."""
+            """Web reader. Returns Markdown."""
             @property
             def name(self) -> str: return "web_md"
             @property
-            def description(self) -> str: return "Visit a URL and get clean Markdown content. High token efficiency."
+            def description(self) -> str: return "Visit a URL and get clean Markdown content."
             @property
             def parameters(self) -> dict[str, Any]:
                 return {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
             async def execute(self, url: str, **kwargs) -> str:
-                acc = os.environ["CF_ACCOUNT_ID"]
-                target = f"https://api.cloudflare.com/client/v4/accounts/{acc}/browser-rendering/markdown"
+                acc = os.environ.get("CF_ACCOUNT_ID")
+                token = os.environ.get("CF_BROWSER_TOKEN")
+                target = "https://api.cloudflare.com/client/v4/accounts/" + str(acc) + "/browser-rendering/markdown"
+                headers = {"Authorization": "Bearer " + str(token)}
+                
                 async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(target, json={"url": url}, headers={"Authorization": f"Bearer {os.environ[\"CF_BROWSER_TOKEN\"]}"})
+                    resp = await client.post(target, json={"url": url}, headers=headers)
                     return resp.text[:12000]
 
-        # 2. --- GENERATE CONFIG.JSON ---
+        # 2. --- CONFIG GENERATION ---
         def env(k, d=""): return os.environ.get(k, d).strip()
         allowed = [x for x in [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")] if x] or ["*"]
-        tok = env("CF_GATEWAY_TOKEN")
-        aig_h = {"cf-aig-authorization": f"Bearer {tok}"} if tok else {}
+        
+        # Build headers manually to avoid f-string nesting
+        aig_tok = env("CF_GATEWAY_TOKEN")
+        aig_headers = {"cf-aig-authorization": "Bearer " + aig_tok} if aig_tok else {}
 
         c = {
             "providers": {
-                "google": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_h}
+                "google": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_headers}
             },
             "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ", "Europe/Rome"), "restrictToWorkspace": False}},
             "tools": {
-                "web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL"), "headers": aig_h}},
-                "http": {
-                    "vision_browser": {
-                        "url": env("GS_VISION_TOOL"), "method": "POST", "headers": {"Content-Type": "application/json"},
-                        "description": "Visual browser tool.",
-                        "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "auth_token": {"type": "string", "const": env("GS_VISION_SECRET")}}, "required": ["url", "auth_token"]}
-                    }
-                },
+                "web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL"), "headers": aig_headers}},
                 "shell": {"enabled": True}
             },
             "channels": {"telegram": {"enabled": True, "token": env("TELEGRAM_TOKEN"), "allowFrom": allowed}}
@@ -97,19 +100,17 @@ services:
         os.makedirs("/root/.nanobot", exist_ok=True)
         with open("/root/.nanobot/config.json", "w") as f: json.dump(c, f)
 
-        # 3. --- MONKEY-PATCH AGENTLOOP ---
+        # 3. --- MONKEY-PATCH ---
         from nanobot.agent.loop import AgentLoop
         original_register = AgentLoop._register_default_tools
-
         def custom_register(self):
             original_register(self)
             self.tools.register(CloudflareEdgeTool())
             self.tools.register(CloudflareBrowserTool())
-
         AgentLoop._register_default_tools = custom_register
 
-        # 4. --- START GATEWAY NATIVELY ---
-        print("Starting gateway with Monkey-Patched tools...")
+        # 4. --- START ---
+        print("Booting Nanobot with Cloudflare Native Tools...")
         from nanobot.cli.commands import app
         sys.argv = ["nanobot", "gateway", "--config", "/root/.nanobot/config.json"]
         app()
