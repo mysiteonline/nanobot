@@ -24,7 +24,7 @@ services:
       - TELEGRAM_USER_ID_2=${TELEGRAM_USER_ID_2}
       - PROXY_BASE_URL=${PROXY_BASE_URL}
       - CF_SEARCH_URL=${CF_SEARCH_URL}
-      - TZ=Europe/Rome
+      - TZ=${TZ:-Europe/Rome}
 
     entrypoint:
       - sh
@@ -68,7 +68,7 @@ services:
                         "provider": "brave",
                         "apiBase": search_url,
                         "headers": {
-                            "cf-aig-authorization": f"Bearer {{tok}}"
+                            "cf-aig-authorization": f"Bearer {tok}"
                         }
                     }
                 },
@@ -126,3 +126,7 @@ services:
     command: ["status"]
     stdin_open: true
     tty: true
+
+volumes:
+  nanobot_data:
+    name: ${VOLUME_NAME:-nanobot-default-data}
