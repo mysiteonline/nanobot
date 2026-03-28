@@ -24,6 +24,7 @@ services:
       - TELEGRAM_USER_ID_2=${TELEGRAM_USER_ID_2}
       - PROXY_BASE_URL=${PROXY_BASE_URL}
       - CF_SEARCH_URL=${CF_SEARCH_URL}
+      - TZ=Europe/Rome
 
     entrypoint:
       - sh
@@ -43,12 +44,23 @@ services:
 
         c = {
             "providers": {
-                "gemini": {"apiKey": k, "apiBase": base},
-                "google": {"apiKey": k, "apiBase": base},
+                "gemini": {
+                    "apiKey": k, 
+                    "apiBase": base,
+                    **({"extraHeaders": {"cf-aig-authorization": f"Bearer {tok}"}} if tok else {})
+                },
+                "google": {
+                    "apiKey": k,
+                    "apiBase": base,
+                    **({"extraHeaders": {"cf-aig-authorization": f"Bearer {tok}"}} if tok else {})
+                },
                 "openrouter": {"apiKey": k}
             },
             "agents": {
-                "defaults": {"model": m}
+                "defaults": {
+                    "model": m,
+                    "timezone": os.environ.get("TZ", "Europe/Rome")
+                }
             },
             "tools": {
                 "web": {
