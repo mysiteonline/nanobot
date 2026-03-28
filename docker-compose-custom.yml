@@ -50,11 +50,9 @@ services:
             def parameters(self) -> dict[str, Any]:
                 return {"type": "object", "properties": {"code": {"type": "string"}, "language": {"type": "string", "enum": ["python", "javascript"]}}, "required": ["code"]}
             async def execute(self, code: str, language: str = "python", **kwargs) -> str:
-                # FIX: Extract to variables to avoid backslash/quote issues in f-strings
                 url = os.environ.get("CF_DYNAMIC_WORKER_URL")
                 sec = os.environ.get("CF_DYNAMIC_WORKER_SECRET")
                 headers = {"Authorization": "Bearer " + str(sec)}
-                
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(url, json={"code": code, "language": language}, headers=headers)
                     return resp.text[:8000]
@@ -73,30 +71,43 @@ services:
                 token = os.environ.get("CF_BROWSER_TOKEN")
                 target = "https://api.cloudflare.com/client/v4/accounts/" + str(acc) + "/browser-rendering/markdown"
                 headers = {"Authorization": "Bearer " + str(token)}
-                
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(target, json={"url": url}, headers=headers)
                     return resp.text[:12000]
 
         # 2. --- CONFIG GENERATION ---
-        def env(k, d=""): return os.environ.get(k, d).strip()
-        allowed = [x for x in [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")] if x] or ["*"]
+        def env(k, d=""): return (os.environ.get(k) or d).strip()
         
-        # Build headers manually to avoid f-string nesting
+        gemini_key = env("GEMINI_API_KEY")
+        print(f"DEBUG: GEMINI_API_KEY detected (Length: {len(gemini_key)})")
+        
+        allowed = [x for x in [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")] if x] or ["*"]
         aig_tok = env("CF_GATEWAY_TOKEN")
         aig_headers = {"cf-aig-authorization": "Bearer " + aig_tok} if aig_tok else {}
 
+        # Define the provider config once
+        p_cfg = {"apiKey": gemini_key, "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_headers}
+
         c = {
             "providers": {
-                "google": {"apiKey": env("GEMINI_API_KEY"), "apiBase": env("CF_PROXY_BASE_URL"), "extraHeaders": aig_headers}
+                "gemini": p_cfg,     # For model names starting with gemini-
+                "google": p_cfg,     # For model names starting with google/
+                "openrouter": p_cfg  # Fallback
             },
-            "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ", "Europe/Rome"), "restrictToWorkspace": False}},
+            "agents": {
+                "defaults": {
+                    "model": env("GEMINI_MODEL", "gemini-1.5-pro"),
+                    "timezone": env("TZ", "Europe/Rome"),
+                    "restrictToWorkspace": False
+                }
+            },
             "tools": {
                 "web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL"), "headers": aig_headers}},
                 "shell": {"enabled": True}
             },
             "channels": {"telegram": {"enabled": True, "token": env("TELEGRAM_TOKEN"), "allowFrom": allowed}}
         }
+        
         os.makedirs("/root/.nanobot", exist_ok=True)
         with open("/root/.nanobot/config.json", "w") as f: json.dump(c, f)
 
