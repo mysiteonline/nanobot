@@ -4,58 +4,48 @@ x-common-config: &common-config
     dockerfile: Dockerfile
   volumes:
     - nanobot_data:/root/.nanobot
+    # Mount your existing file from Coolify Storage
+    - ./entrypoint.py:/root/entrypoint.py
 
 services:
-  nanobot-gateway:
+  # INSTANCE 1: User A
+  nanobot-user-a:
     <<: *common-config
     restart: unless-stopped
-    ports:
-      - "18790:18790"
-    # Keep ALL your variables here so the bot can use them to write its own code
-    environment:
+    ports: ["18790:18790"]
+    environment: &common-env
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=${GEMINI_MODEL}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - CF_GATEWAY_TOKEN=${CF_GATEWAY_TOKEN}
       - GS_VISION_TOOL=${GS_VISION_TOOL}
       - GS_VISION_SECRET=${GS_VISION_SECRET}
-      - CF_PROXY_BASE_URL=${CF_PROXY_BASE_URL}
-      - CF_BRAVE_SEARCH_URL=${CF_BRAVE_SEARCH_URL}
-      - CF_DYNAMIC_WORKER_URL=${CF_DYNAMIC_WORKER_URL}
-      - CF_DYNAMIC_WORKER_SECRET=${CF_DYNAMIC_WORKER_SECRET}
-      - CF_ACCOUNT_ID=${CF_ACCOUNT_ID}
-      - CF_BROWSER_TOKEN=${CF_BROWSER_TOKEN}
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-      - TELEGRAM_USER_ID=${TELEGRAM_USER_ID}
-      - TELEGRAM_USER_ID_2=${TELEGRAM_USER_ID_2}
-      - TZ=${TZ:-Europe/Rome}
+      - INSTANCE_NAME=user_a
+      - TARGET_ID=${TELEGRAM_USER_ID}
+    entrypoint: ["python3", "/root/entrypoint.py"]
 
-    entrypoint:
-      - sh
-      - -c
-      - |
-        # Generate the basic config without any monkey-patching
-        python -c '
-        import os, json
-        def env(k, d=""): return (os.environ.get(k) or d).strip()
-        
-        p_cfg = {
-            "apiKey": env("GEMINI_API_KEY"),
-            "apiBase": env("CF_PROXY_BASE_URL"),
-            "extraHeaders": {"cf-aig-authorization": "Bearer " + env("CF_GATEWAY_TOKEN")}
-        }
+  # INSTANCE 2: User B
+  nanobot-user-b:
+    <<: *common-config
+    restart: unless-stopped
+    ports: ["18791:18791"]
+    environment:
+      <<: *common-env
+      - INSTANCE_NAME=user_b
+      - TARGET_ID=${TELEGRAM_USER_ID_2}
+    entrypoint: ["python3", "/root/entrypoint.py"]
 
-        c = {
-            "providers": {"gemini": p_cfg, "google": p_cfg},
-            "agents": {"defaults": {"model": env("GEMINI_MODEL"), "timezone": env("TZ")}},
-            "tools": {
-                "web": {"search": {"provider": "brave", "apiBase": env("CF_BRAVE_SEARCH_URL")}},
-                "shell": {"enabled": True}
-            },
-            "channels": {
-                "telegram": {"enabled": True, "token": env("TELEGRAM_TOKEN"), "allowFrom": [env("TELEGRAM_USER_ID"), env("TELEGRAM_USER_ID_2")]}
-            }
-        }
-        os.makedirs("/root/.nanobot", exist_ok=True)
-        with open("/root/.nanobot/config.json", "w") as f: json.dump(c, f)
-        '
-        exec nanobot gateway --config /root/.nanobot/config.json
+  # INSTANCE 3: Group A
+  nanobot-group-a:
+    <<: *common-config
+    restart: unless-stopped
+    ports: ["18792:18792"]
+    environment:
+      <<: *common-env
+      - INSTANCE_NAME=group_a
+      - TARGET_ID=${TELEGRAM_GROUP_ID}
+    entrypoint: ["python3", "/root/entrypoint.py"]
+
+volumes:
+  nanobot_data:
+    name: ${VOLUME_NAME:-nanobot-multi-instance}
+    external: true
