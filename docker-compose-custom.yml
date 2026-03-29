@@ -1,63 +1,63 @@
 services:
-  nanobot-user-a:
+  # INSTANCE 1: Personal Chat - User 1
+  nanobot-user-1:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "18790:18790"
+    ports: ["18790:18790"]
     volumes:
       - nanobot_data:/root/.nanobot
       - ./entrypoint.py:/root/entrypoint.py
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN_1} # Token for Bot 1
       - CF_GATEWAY_TOKEN=${CF_GATEWAY_TOKEN}
       - GS_VISION_TOOL=${GS_VISION_TOOL}
       - GS_VISION_SECRET=${GS_VISION_SECRET}
-      - INSTANCE_NAME=user_a
+      - INSTANCE_NAME=user_1
       - TARGET_ID=${TELEGRAM_USER_ID}
       - TZ=${TZ:-Europe/Rome}
     entrypoint: ["python3", "/root/entrypoint.py"]
 
-  nanobot-user-b:
+  # INSTANCE 2: Personal Chat - User 2
+  nanobot-user-2:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "18791:18791"
+    ports: ["18791:18791"]
     volumes:
       - nanobot_data:/root/.nanobot
       - ./entrypoint.py:/root/entrypoint.py
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN_2} # Token for Bot 2
       - CF_GATEWAY_TOKEN=${CF_GATEWAY_TOKEN}
       - GS_VISION_TOOL=${GS_VISION_TOOL}
       - GS_VISION_SECRET=${GS_VISION_SECRET}
-      - INSTANCE_NAME=user_b
+      - INSTANCE_NAME=user_2
       - TARGET_ID=${TELEGRAM_USER_ID_2}
       - TZ=${TZ:-Europe/Rome}
     entrypoint: ["python3", "/root/entrypoint.py"]
 
-  nanobot-group-a:
+  # INSTANCE 3: Group Chat - Group 1
+  nanobot-group-1:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "18792:18792"
+    ports: ["18792:18792"]
     volumes:
       - nanobot_data:/root/.nanobot
       - ./entrypoint.py:/root/entrypoint.py
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN_GROUP_1} # Token for Group Bot 1
       - CF_GATEWAY_TOKEN=${CF_GATEWAY_TOKEN}
       - GS_VISION_TOOL=${GS_VISION_TOOL}
       - GS_VISION_SECRET=${GS_VISION_SECRET}
-      - INSTANCE_NAME=group_a
+      - INSTANCE_NAME=group_1
       - TARGET_ID=${TELEGRAM_GROUP_ID}
       - TZ=${TZ:-Europe/Rome}
     entrypoint: ["python3", "/root/entrypoint.py"]
