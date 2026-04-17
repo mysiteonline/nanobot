@@ -12,14 +12,17 @@ services:
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-      - TELEGRAM_TARGET_ID=${TELEGRAM_TARGET_ID} # Use this one var for User or Group
+      - TELEGRAM_TARGET_ID=${TELEGRAM_TARGET_ID}
       - CF_GATEWAY_TOKEN=${CF_GATEWAY_TOKEN}
       - GS_VISION_TOOL=${GS_VISION_TOOL}
       - GS_VISION_SECRET=${GS_VISION_SECRET}
       - TZ=${TZ:-Europe/Rome}
-    entrypoint: ["python3", "/root/entrypoint.py"]
+    # This specific format fixes the [Errno 13] Permission denied error
+    entrypoint: 
+      - sh
+      - -c
+      - "chmod 644 /root/entrypoint.py && python3 /root/entrypoint.py"
 
 volumes:
   nanobot_data:
-    # Coolify will automatically unique-ify this if you use the 'Duplicate' feature
     driver: local
