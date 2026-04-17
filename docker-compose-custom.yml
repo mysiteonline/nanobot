@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # ADD THIS LINE HERE
+    user: root
     restart: unless-stopped
     ports:
       - "18790:18790"
@@ -17,7 +19,6 @@ services:
       - GS_VISION_TOOL=${GS_VISION_TOOL}
       - GS_VISION_SECRET=${GS_VISION_SECRET}
       - TZ=${TZ:-Europe/Rome}
-    # This specific format fixes the [Errno 13] Permission denied error
     entrypoint: 
       - sh
       - -c
